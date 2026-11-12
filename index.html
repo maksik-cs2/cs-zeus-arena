@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CS Zeus Arena</title>
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three/build/three.module.js",
+    "three/addons/": "/vendor/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+  <div id="menu">
+    <h1>CS <span>ZEUS</span> ARENA</h1>
+    <p class="sub">Онлайн шутер від першої особи · de_dust2 · Zeus x27</p>
+
+    <label>Нікнейм
+      <input id="nameInput" maxlength="16" placeholder="Гравець" />
+    </label>
+
+    <div class="modes">
+      <button class="modeBtn" data-mode="ffa">Всі проти всіх</button>
+      <button class="modeBtn" data-mode="1v1">1 на 1</button>
+      <button class="modeBtn" data-mode="2v2">2 на 2</button>
+      <button class="modeBtn" data-mode="3v3">3 на 3</button>
+      <button class="modeBtn" data-mode="4v4">4 на 4</button>
+    </div>
+
+    <div class="row">
+      <button id="createPrivateBtn">Створити приватну кімнату</button>
+    </div>
+    <div class="row joinRow">
+      <input id="codeInput" maxlength="5" placeholder="КОД КІМНАТИ" />
+      <button id="joinCodeBtn">Приєднатись за кодом</button>
+    </div>
+
+    <label>Адреса сервера
+      <input id="serverInput" placeholder="напр. my-server.onrender.com (пусто = цей сервер)" />
+    </label>
+
+    <p id="menuStatus"></p>
+    <p class="hint">Щоб грати з друзями на іншому wifi — задеплойте сервер (див. README) і поділіться кодом кімнати або посиланням.</p>
+  </div>
+
+  <div id="hud" class="hidden">
+    <div id="crosshair">+</div>
+    <div id="healthWrap"><div id="healthBar"></div><span id="healthText">100</span></div>
+    <div id="roomBadge"></div>
+    <div id="scoreBadge"></div>
+    <div id="killfeed"></div>
+    <div id="centerMsg"></div>
+    <div id="scoreboard" class="hidden"></div>
+    <div id="waitOverlay" class="hidden">Очікуємо гравців… <span id="waitCount"></span></div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

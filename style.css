@@ -1,0 +1,45 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; background: #0c0d10; color: #e8e8ec; font-family: 'Segoe UI', Roboto, Arial, sans-serif; overflow: hidden; }
+canvas { display: block; }
+
+#menu {
+  position: fixed; inset: 0; z-index: 10;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: radial-gradient(1200px 600px at 50% 20%, #1b1e26, #0c0d10 70%);
+  gap: 14px; padding: 20px; text-align: center;
+}
+#menu h1 { font-size: 2.6em; letter-spacing: 2px; margin: 0; }
+#menu h1 span { color: #ffb020; }
+.sub { color: #9aa0ad; margin: 0 0 10px; }
+#menu label { display: flex; flex-direction: column; gap: 6px; font-size: 0.85em; color: #aab; width: 320px; }
+#menu input { padding: 10px 12px; border-radius: 8px; border: 1px solid #333945; background: #16181d; color: #eee; font-size: 1em; }
+.modes { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 520px; }
+.modeBtn, #createPrivateBtn, #joinCodeBtn {
+  padding: 12px 18px; border-radius: 10px; border: 1px solid #39404f; background: #1a1d24; color: #eee;
+  cursor: pointer; font-size: 1em; transition: all .15s;
+}
+.modeBtn:hover, #createPrivateBtn:hover, #joinCodeBtn:hover { background: #ffb020; color: #121212; border-color: #ffb020; }
+.modeBtn.active { background: #ffb020; color: #121212; border-color: #ffb020; }
+.row { display: flex; gap: 10px; align-items: center; }
+.joinRow input { width: 140px; text-align: center; letter-spacing: 3px; text-transform: uppercase; }
+#menuStatus { min-height: 20px; color: #ff6b6b; }
+.hint { max-width: 460px; color: #767c8a; font-size: 0.8em; }
+
+#hud { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
+#hud.hidden { display: none; }
+#crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #ffffffcc; font-size: 22px; text-shadow: 0 0 3px #000; }
+#healthWrap { position: absolute; left: 24px; bottom: 24px; width: 220px; height: 22px; background: #1a1d24cc; border: 1px solid #333; border-radius: 6px; overflow: hidden; }
+#healthBar { height: 100%; width: 100%; background: linear-gradient(90deg, #ff4d4d, #ffb020); transition: width .2s; }
+#healthText { position: absolute; left: 8px; top: 2px; font-size: 13px; font-weight: bold; text-shadow: 0 0 3px #000; }
+#roomBadge { position: absolute; left: 24px; top: 20px; font-size: 13px; color: #9aa0ad; background: #0008; padding: 6px 10px; border-radius: 6px; }
+#scoreBadge { position: absolute; right: 24px; top: 20px; font-size: 15px; font-weight: bold; background: #0008; padding: 6px 14px; border-radius: 6px; }
+#killfeed { position: absolute; right: 24px; top: 70px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; max-width: 320px; }
+#killfeed div { background: #0009; padding: 5px 10px; border-radius: 5px; font-size: 13px; animation: fadeOut 4s forwards; }
+@keyframes fadeOut { 0%,70% { opacity: 1; } 100% { opacity: 0; } }
+#centerMsg { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); font-size: 1.6em; font-weight: bold; text-align: center; text-shadow: 0 2px 6px #000; }
+#scoreboard { position: absolute; inset: 0; background: #000b; display: flex; align-items: center; justify-content: center; pointer-events: auto; }
+#scoreboard.hidden { display: none; }
+#scoreboard table { border-collapse: collapse; font-size: 15px; min-width: 360px; }
+#scoreboard th, #scoreboard td { padding: 8px 16px; border-bottom: 1px solid #333; }
+#waitOverlay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 1.3em; background: #000a; padding: 14px 24px; border-radius: 10px; }
+#waitOverlay.hidden { display: none; }
