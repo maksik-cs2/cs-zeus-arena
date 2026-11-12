@@ -4,7 +4,7 @@ import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // ---------- constants ----------
-const SCALE = 0.0254;          // Source engine units -> meters
+const SCALE = 0.0254;         // Source engine units -> meters
 const EYE_HEIGHT = 1.72;
 const MOVE_SPEED = 4.6;        // m/s
 const PLAYER_RADIUS = 0.35;
@@ -41,7 +41,7 @@ let myId = null, myTeam = null, roomMode = null, roomCode = null;
 const remotePlayers = new Map(); // id -> {obj, hp, alive, team, name, target:{x,y,z,rotY}, box?}
 
 function wsUrl() {
-  const custom = el('serverInput').value.trim();
+  const custom = el('serverInput') ? el('serverInput').value.trim() : '';
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   if (!custom) return proto + location.host;
   if (custom.startsWith('ws://') || custom.startsWith('wss://')) return custom;
@@ -263,7 +263,6 @@ function loadAgentTemplate() {
     const box2 = new THREE.Box3().setFromObject(model);
     model.position.y -= box2.min.y; // feet to y=0
     agentTemplate = model;
-    // apply to any remote players already waiting on the template
     for (const rp of remotePlayers.values()) if (!rp.obj) attachAgentModel(rp);
   }, undefined, (err) => console.error('agent load error', err));
 }
@@ -293,7 +292,6 @@ function enterWorld() {
 }
 
 function respawnAt(zone) {
-  // zone: {sx, sy, radius} in source .obj units
   let found = false;
   for (let i = 0; i < 24 && !found; i++) {
     const ox = zone.sx + (Math.random() * 2 - 1) * zone.radius;
@@ -350,7 +348,7 @@ function applyState(players) {
       if (agentTemplate) attachAgentModel(rp);
     }
     rp.alive = p.alive;
-    const wx = p.x, wy = p.y, wz = p.z; // server stores world-scaled meters (client sends them already scaled)
+    const wx = p.x, wy = p.y, wz = p.z;
     rp.target.x = wx; rp.target.y = wy; rp.target.z = wz; rp.target.rotY = p.rotY;
     if (rp.obj) rp.obj.visible = p.alive;
   }
@@ -378,7 +376,6 @@ function updateMovement(dt) {
   tryMoveAxis(moveDir.x, 0, 0);
   tryMoveAxis(0, 0, moveDir.z);
 
-  // ground snap
   downRay.set(new THREE.Vector3(playerPos.x, playerPos.y + 2, playerPos.z), new THREE.Vector3(0, -1, 0));
   downRay.far = 10;
   const hits = mapMeshes.length ? downRay.intersectObjects(mapMeshes, false) : [];
@@ -399,12 +396,11 @@ function tryMoveAxis(dx, dy, dz) {
     raycaster.set(new THREE.Vector3(playerPos.x, playerPos.y - EYE_HEIGHT + 1.0, playerPos.z), dir);
     raycaster.far = dist + PLAYER_RADIUS;
     const hits = raycaster.intersectObjects(mapMeshes, false);
-    if (hits.length && hits[0].distance < dist + PLAYER_RADIUS) return; // blocked
+    if (hits.length && hits[0].distance < dist + PLAYER_RADIUS) return;
   }
   playerPos.x += dx; playerPos.y += dy; playerPos.z += dz;
 }
 
-// ---------- network send loop ----------
 setInterval(() => {
   if (!worldReady || !ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({
@@ -413,7 +409,6 @@ setInterval(() => {
   }));
 }, 50);
 
-// ---------- render loop ----------
 function tick() {
   const dt = Math.min(0.05, clock.getDelta());
   if (worldReady) {
