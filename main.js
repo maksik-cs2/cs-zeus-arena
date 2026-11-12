@@ -3,7 +3,7 @@ const SCALE = 0.0254;         // Source engine units -> meters
 const EYE_HEIGHT = 1.72;
 const MOVE_SPEED = 4.6;        // m/s
 const PLAYER_RADIUS = 0.35;
-const ZEUS_CLIENT_RANGE = 3.0; // a bit generous, server re-validates
+const ZEUS_CLIENT_RANGE = 3.0; 
 const ZEUS_COOLDOWN_MS = 1100;
 
 // ---------- DOM ----------
@@ -33,7 +33,7 @@ el('joinCodeBtn').addEventListener('click', () => {
 // ---------- networking ----------
 let ws = null;
 let myId = null, myTeam = null, roomMode = null, roomCode = null;
-const remotePlayers = new Map(); // id -> {obj, hp, alive, team, name, target:{x,y,z,rotY}, box?}
+const remotePlayers = new Map();
 
 function wsUrl() {
   const custom = el('serverInput') ? el('serverInput').value.trim() : '';
@@ -147,6 +147,9 @@ let mapMeshes = [];
 let clock = new THREE.Clock();
 let zeusModel = null, zeusMixer = null, zeusActions = {};
 let agentTemplate = null;
+let myAvatar = null; // Власна модель для вигляду від 3-ї особи
+let thirdPerson = false; // Перемикач режиму камери (F3)
+
 const raycaster = new THREE.Raycaster();
 const downRay = new THREE.Raycaster();
 
@@ -200,7 +203,17 @@ function initScene() {
   document.addEventListener('mousedown', (e) => {
     if (pointerLocked && e.button === 0) tryAttack();
   });
-  document.addEventListener('keydown', (e) => keys[e.code] = true);
+  
+  document.addEventListener('keydown', (e) => {
+    keys[e.code] = true;
+    // Перемикач вигляду від 3-ї особи на клавішу F3
+    if (e.code === 'F3') {
+      e.preventDefault();
+      thirdPerson = !thirdPerson;
+      if (myAvatar) myAvatar.visible = thirdPerson;
+      if (zeusModel) zeusModel.visible = !thirdPerson;
+    }
+  });
   document.addEventListener('keyup', (e) => keys[e.code] = false);
 
   renderer.setAnimationLoop(tick);
@@ -258,11 +271,18 @@ function loadAgentTemplate() {
     const box2 = new THREE.Box3().setFromObject(model);
     model.position.y -= box2.min.y;
     agentTemplate = model;
+
+    // Створюємо власну модель для вигляду від 3-ї особи
+    myAvatar = model.clone(true);
+    myAvatar.visible = false;
+    scene.add(myAvatar);
+
     for (const rp of remotePlayers.values()) if (!rp.obj) attachAgentModel(rp);
   }, undefined, (err) => console.error('agent load error', err));
 }
 
 function attachAgentModel(rp) {
+  if (!agentTemplate) return;
   const model = agentTemplate.clone(true);
   const group = new THREE.Group();
   group.add(model);
@@ -311,8 +331,10 @@ function respawnAt(zone) {
 
 const moveDir = new THREE.Vector3();
 function updateMovement(dt) {
-  const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw) * -1);
-  const right = new THREE.Vector3(Math.cos(yaw), 0, Math.sin(yaw));
+  // Виправляємо напрямки руху (тепер W завжди вперед туди, куди дивиться камера)
+  const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+  const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+  
   moveDir.set(0, 0, 0);
   if (keys['KeyW']) moveDir.add(forward);
   if (keys['KeyS']) moveDir.sub(forward);
@@ -326,16 +348,30 @@ function updateMovement(dt) {
   playerPos.x += moveDir.x;
   playerPos.z += moveDir.z;
 
-  downRay.set(new THREE.Vector3(playerPos.x, playerPos.y + 5.0, playerPos.z), new THREE.Vector3(0, -1, 0));
-  downRay.far = 20.0;
+  // Плавне прилипання до підлоги без стрибків
+  downRay.set(new THREE.Vector3(playerPos.x, playerPos.y + 3.0, playerPos.z), new THREE.Vector3(0, -1, 0));
+  downRay.far = 10.0;
   const hits = mapMeshes.length ? downRay.intersectObjects(mapMeshes, false) : [];
   if (hits.length) {
     const targetY = hits[0].point.y + EYE_HEIGHT;
-    playerPos.y += (targetY - playerPos.y) * Math.min(1, dt * 12);
+    playerPos.y += (targetY - playerPos.y) * Math.min(1, dt * 10);
   }
 
-  camera.position.copy(playerPos);
-  camera.rotation.set(pitch, yaw, 0, 'YXZ');
+  // Налаштування камери залежно від режиму (1-ша чи 3-тя особа)
+  if (thirdPerson) {
+    // Зміщуємо камеру назад і вгору для 3-го обличчя
+    const offset = new THREE.Vector3(0, 1.8, 3.0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    camera.position.copy(playerPos).add(offset);
+    camera.rotation.set(pitch, yaw, 0, 'YXZ');
+    if (myAvatar) {
+      myAvatar.position.copy(playerPos);
+      myAvatar.position.y -= EYE_HEIGHT; // Ставимо по стопи
+      myAvatar.rotation.y = yaw;
+    }
+  } else {
+    camera.position.copy(playerPos);
+    camera.rotation.set(pitch, yaw, 0, 'YXZ');
+  }
 }
 
 function tryAttack() {
