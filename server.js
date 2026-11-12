@@ -16,15 +16,17 @@ const TEAM_MODE_SIZES = { '1v1': 1, '2v2': 2, '3v3': 3, '4v4': 4 };
 const KILLS_TO_WIN = { '1v1': 8, '2v2': 12, '3v3': 16, '4v4': 20 };
 
 const app = express();
-app.use(express.static(path.join(__dirname, '..', 'public')));
-app.use('/vendor/three/build', express.static(path.join(__dirname, '..', 'node_modules', 'three', 'build')));
-app.use('/vendor/three/examples/jsm', express.static(path.join(__dirname, '..', 'node_modules', 'three', 'examples', 'jsm')));
+// Оскільки всі файли тепер у корені, роздаємо статику з __dirname
+app.use(express.static(__dirname));
+app.use('/vendor/three/build', express.static(path.join(__dirname, 'node_modules', 'three', 'build')));
+app.use('/vendor/three/examples/jsm', express.static(path.join(__dirname, 'node_modules', 'three', 'examples', 'jsm')));
+
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 let nextId = 1;
-const rooms = new Map();          // roomCode -> room
-const waitingPools = {            // mode -> array of sockets waiting for quick match
+const rooms = new Map();         // roomCode -> room
+const waitingPools = {           // mode -> array of sockets waiting for quick match
   '1v1': [], '2v2': [], '3v3': [], '4v4': []
 };
 let ffaRoom = null;
