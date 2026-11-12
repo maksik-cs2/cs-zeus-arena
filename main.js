@@ -207,7 +207,7 @@ function initScene() {
 }
 
 function loadMap() {
-  const mtlLoader = new MTLLoader();
+  const mtlLoader = new THREE.MTLLoader();
   mtlLoader.setPath('assets/map/');
   mtlLoader.setResourcePath('assets/map/textures/');
   mtlLoader.load('de_dust2.mtl', (materials) => {
@@ -215,7 +215,7 @@ function loadMap() {
     for (const key in materials.materials) {
       materials.materials[key].side = THREE.DoubleSide;
     }
-    const objLoader = new OBJLoader();
+    const objLoader = new THREE.OBJLoader();
     objLoader.setMaterials(materials);
     objLoader.setPath('assets/map/');
     objLoader.load('de_dust2.obj', (obj) => {
@@ -229,7 +229,7 @@ function loadMap() {
 }
 
 function loadZeus() {
-  new GLTFLoader().load('assets/models/zeus.glb', (gltf) => {
+  new THREE.GLTFLoader().load('assets/models/zeus.glb', (gltf) => {
     zeusModel = gltf.scene;
     const box = new THREE.Box3().setFromObject(zeusModel);
     const size = new THREE.Vector3(); box.getSize(size);
@@ -248,7 +248,7 @@ function loadZeus() {
 }
 
 function loadAgentTemplate() {
-  new GLTFLoader().load('assets/models/agent.gltf', (gltf) => {
+  new THREE.GLTFLoader().load('assets/models/agent.gltf', (gltf) => {
     const model = gltf.scene;
     const box = new THREE.Box3().setFromObject(model);
     const size = new THREE.Vector3(); box.getSize(size);
