@@ -1,18 +1,17 @@
 // ============================================================================
-// CS ZEUS ARENA - ENTERPRISE CLIENT CONTROLLER (1000+ LINES MODULE)
-// Повний клієнтський рушій мультиплеєрного шутера на Three.js (r128) та WebSocket
+// CS ZEUS ARENA - ENTERPRISE CLIENT CONTROLLER
+// Модуль ігрового клієнта на Three.js (r128) та WebSocket
 // ============================================================================
 
-// ---------- 1. КОНСТАНТИ, ФІЗИЧНІ ПАРАМЕТРИ ТА КОЕФІЦІЄНТИ ----------
-const SCALE = 0.0254;          // Коефіцієнт переведення одиниць Source Engine в метри
-const EYE_HEIGHT = 1.72;       // Висота очей гравця (стандартна камера від 1-ї особи)
-const MOVE_SPEED = 4.4;        // Базова швидкість пересування гравця (м/с)
-const PLAYER_RADIUS = 0.38;    // Радіус циліндра колізії для перевірки стін
-const ZEUS_CLIENT_RANGE = 3.2; // Максимальна дальність нанесення удару Зевсом
-const ZEUS_COOLDOWN_MS = 1100; // Час перезарядки використання Зевса (мс)
-const GRAVITY_VAL = 9.81;      // Константи гравітації для майбутніх розширень фізики
+// ---------- 1. КОНСТАНТИ ТА ПАРАМЕТРИ ФІЗИКИ ----------
+const SCALE = 0.0254;          
+const EYE_HEIGHT = 1.72;       
+const MOVE_SPEED = 4.4;        
+const PLAYER_RADIUS = 0.38;    
+const ZEUS_CLIENT_RANGE = 3.2; 
+const ZEUS_COOLDOWN_MS = 1100; 
 
-// ---------- 2. DOM-ЕЛЕМЕНТИ ТА УПРАВЛІННЯ ІНТЕРФЕЙСОМ (HUD) ----------
+// ---------- 2. DOM-ЕЛЕМЕНТИ ТА HUD ----------
 const el = (id) => document.getElementById(id);
 const menuEl = el('menu');
 const hudEl = el('hud');
@@ -27,9 +26,9 @@ const killfeedEl = el('killfeed');
 const centerMsg = el('centerMsg');
 const scoreboardEl = el('scoreboard');
 
-// ---------- 3. МЕНЮ ВИБОРУ РЕЖИМІВ ТА СТОРІН КОМАНД ----------
+// ---------- 3. МЕНЮ ВИБОРУ РЕЖИМІВ ТА КОМАНД ----------
 let selectedGameMode = 'ffa';
-let selectedPlayerTeam = 'random'; // 'T' (Терористи), 'CT' (Контр-терористи), 'random'
+let selectedPlayerTeam = 'random'; 
 
 document.querySelectorAll('.modeBtn').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -37,7 +36,6 @@ document.querySelectorAll('.modeBtn').forEach((btn) => {
     btn.classList.add('active');
     selectedGameMode = btn.dataset.mode;
     
-    // Якщо гра командна, активуємо вибір сторони (Терористи / Спецназ)
     if (['2v2', '3v3', '4v4', '1v1'].includes(selectedGameMode)) {
       renderTeamSelectionPanel();
     } else {
@@ -66,17 +64,17 @@ function renderTeamSelectionPanel() {
 el('createPrivateBtn').addEventListener('click', () => initializeGameConnection({ mode: selectedGameMode, team: selectedPlayerTeam, createPrivate: true }));
 el('joinCodeBtn').addEventListener('click', () => {
   const roomCodeValue = el('codeInput').value.trim().toUpperCase();
-  if (!roomCodeValue) { statusEl.textContent = 'Будь ласка, введіть код кімнати'; return; }
+  if (!roomCodeValue) { statusEl.textContent = 'Введіть код кімнати'; return; }
   initializeGameConnection({ roomCode: roomCodeValue, team: selectedPlayerTeam });
 });
 
-// ---------- 4. МЕРЕЖЕВИЙ КЛІЄНТ ТА WEBSOCKET ПРОТОКОЛ ----------
+// ---------- 4. МЕРЕЖЕВИЙ КЛІЄНТ (WEBSOCKET) ----------
 let socketConnection = null;
 let localPlayerId = null;
 let localPlayerTeam = null;
 let activeRoomMode = null;
 let activeRoomCode = null;
-const remotePlayersRegistry = new Map(); // Зберігає стани інших підключених гравців
+const remotePlayersRegistry = new Map();
 
 function resolveWebSocketAddress() {
   const customAddr = el('serverInput') ? el('serverInput').value.trim() : '';
@@ -87,11 +85,11 @@ function resolveWebSocketAddress() {
 }
 
 function initializeGameConnection(options) {
-  statusEl.textContent = 'З'єднання з сервером арени…';
+  statusEl.textContent = "Підключення до сервера…";
   try {
     socketConnection = new WebSocket(resolveWebSocketAddress());
   } catch (err) {
-    statusEl.textContent = 'Не вдалося встановити з'єднання з сервером';
+    statusEl.textContent = "Помилка підключення";
     return;
   }
 
@@ -107,11 +105,11 @@ function initializeGameConnection(options) {
   };
 
   socketConnection.onclose = () => {
-    statusEl.textContent = 'З'єднання перервано сервером';
+    statusEl.textContent = "З'єднання розірвано";
   };
 
   socketConnection.onerror = () => {
-    statusEl.textContent = 'Помилка мережевого сокета';
+    statusEl.textContent = "Помилка мережі";
   };
 
   socketConnection.onmessage = (event) => {
@@ -119,7 +117,7 @@ function initializeGameConnection(options) {
       const parsedPacket = JSON.parse(event.data);
       processServerPacket(parsedPacket);
     } catch (parseError) {
-      console.error('Помилка обробки пакету:', parseError);
+      console.error('Помилка парсингу:', parseError);
     }
   };
 }
@@ -137,14 +135,14 @@ function processServerPacket(packet) {
       
       if (packet.waiting) {
         waitOverlay.classList.remove('hidden');
-        waitCount.textContent = 'Очікування суперників…';
+        waitCount.textContent = 'Очікування гравців…';
       }
       break;
 
     case 'roomInfo':
       if (waitOverlay && !waitOverlay.classList.contains('hidden')) {
         const targetCapacity = packet.mode === 'ffa' ? 2 : fetchModeLimit(packet.mode);
-        waitCount.textContent = `(${packet.players.length}/${targetCapacity}) гравців`;
+        waitCount.textContent = `(${packet.players.length}/${targetCapacity})`;
       }
       break;
 
@@ -159,7 +157,7 @@ function processServerPacket(packet) {
       break;
 
     case 'death':
-      triggerCenterNotification(`Вас ліквідував ${packet.by}`, 1600);
+      triggerCenterNotification(`Вас вбив ${packet.by}`, 1600);
       break;
 
     case 'state':
@@ -222,14 +220,14 @@ function renderMatchEndScoreboard(data) {
     </div>`;
 }
 
-// ---------- 5. THREE.JS ГРАФІЧНИЙ ДВИГУН ТА СЦЕНА ----------
+// ---------- 5. THREE.JS ГРАФІЧНИЙ ДВИГУН ----------
 let renderEngine, mainScene, activeCamera, mapGroupContainer = null;
 let collisionMeshesList = [];
 let deltaClock = new THREE.Clock();
 let zeusWeaponMesh = null, zeusAnimationMixer = null, zeusAnimationActions = {};
 let playerModelTemplate = null;
 let primaryAvatarMesh = null;
-let isThirdPersonActive = false; // Перемикач 1-ї та 3-ї особи на F3
+let isThirdPersonActive = false;
 
 const hitRaycaster = new THREE.Raycaster();
 const groundRaycaster = new THREE.Raycaster();
@@ -264,7 +262,6 @@ function initThreeJsEngine() {
 
   activeCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 500);
 
-  // Освітлювальні прилади
   const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
   mainScene.add(hemiLight);
   
@@ -340,7 +337,7 @@ function loadMapGeometry() {
       });
       mapGroupContainer = obj;
       mainScene.add(obj);
-    }, undefined, (err) => console.error('Помилка об'єкту мапи:', err));
+    }, undefined, (err) => console.error('Помилка об’єкту мапи:', err));
   }, undefined, (err) => console.error('Помилка матеріалів мапи:', err));
 }
 
@@ -410,7 +407,7 @@ function createRemotePlayerMesh(record) {
   record.hitSphere = sphere;
 }
 
-// ---------- 6. ФІЗИЧНИЙ МОДУЛЬ РУХУ ТА КОЛІЗІЙ ----------
+// ---------- 6. ФІЗИЧНИЙ МОДУЛЬ РУХУ ----------
 function respawnAt(zone) {
   let placed = false;
   for (let i = 0; i < 45 && !placed; i++) {
@@ -450,7 +447,6 @@ function updatePlayerPhysics(dt) {
     displacement.normalize().multiplyScalar(MOVE_SPEED * dt);
   }
 
-  // Суворі колізії зі стінами мапи
   if (collisionMeshesList.length && displacement.lengthSq() > 0) {
     const originCheck = playerWorldPos.clone().add(new THREE.Vector3(0, -0.4, 0));
     wallRaycaster.set(originCheck, displacement.clone().normalize());
@@ -466,7 +462,6 @@ function updatePlayerPhysics(dt) {
     playerWorldPos.z += displacement.z;
   }
 
-  // Рівне прилипання до поверхні землі
   groundRaycaster.set(new THREE.Vector3(playerWorldPos.x, playerWorldPos.y + 2.5, playerWorldPos.z), new THREE.Vector3(0, -1, 0));
   groundRaycaster.far = 8.0;
   const floors = collisionMeshesList.length ? groundRaycaster.intersectObjects(collisionMeshesList, false) : [];
@@ -490,7 +485,7 @@ function updatePlayerPhysics(dt) {
   }
 }
 
-// ---------- 7. СИСТЕМА БОЮ ТА РЕЄСТРАЦІЇ ВЛАСНИХ ПОДІЙ ----------
+// ---------- 7. БОЙОВИЙ МОДУЛЬ ----------
 function executeZeusAttack() {
   const currentMillis = performance.now();
   if (currentMillis - lastAttackTick < ZEUS_COOLDOWN_MS) return;
@@ -521,7 +516,7 @@ function executeZeusAttack() {
   lastAttackTick = currentMillis;
 }
 
-// ---------- 8. СИНХРОНІЗАЦІЯ ДАНИХ ІНШИХ ГРАВЦІВ ----------
+// ---------- 8. СИНХРОНІЗАЦІЯ ----------
 function syncRemotePlayersState(list) {
   const activeIds = new Set();
   for (const p of list) {
@@ -571,7 +566,6 @@ function disposeRemotePlayer(id) {
   remotePlayersRegistry.delete(id);
 }
 
-// Регулярна відправка пакету input на сервер кожні 50мс
 setInterval(() => {
   if (!isEngineActive || !socketConnection || socketConnection.readyState !== WebSocket.OPEN) return;
   socketConnection.send(JSON.stringify({
@@ -584,7 +578,7 @@ setInterval(() => {
   }));
 }, 50);
 
-// ---------- 9. ОСНОВНИЙ ЦИКЛ РЕНДЕРИНГУ (TICK) ----------
+// ---------- 9. ЦИКЛ РЕНДЕРИНГУ ----------
 function mainGameTick() {
   const dt = Math.min(0.05, deltaClock.getDelta());
 
@@ -595,7 +589,6 @@ function mainGameTick() {
       zeusAnimationMixer.update(dt);
     }
 
-    // Плавна інтерполяція віддалених моделей гравців
     for (const rp of remotePlayersRegistry.values()) {
       if (!rp.obj) continue;
       const targetPos = new THREE.Vector3(rp.target.x, rp.target.y, rp.target.z);
