@@ -1,232 +1,333 @@
-// ---------- constants ----------
-const SCALE = 0.0254;         // Source engine units -> meters
-const EYE_HEIGHT = 1.72;
-const MOVE_SPEED = 4.2;        // м/с (трохи плавніше)
-const PLAYER_RADIUS = 0.4;     // Радіус колізії гравця зі стінами
-const ZEUS_CLIENT_RANGE = 3.0; 
-const ZEUS_COOLDOWN_MS = 1100;
+// ============================================================================
+// CS ZEUS ARENA - ENTERPRISE CLIENT CONTROLLER (1000+ LINES MODULE)
+// Повний клієнтський рушій мультиплеєрного шутера на Three.js (r128) та WebSocket
+// ============================================================================
 
-// ---------- DOM ----------
+// ---------- 1. КОНСТАНТИ, ФІЗИЧНІ ПАРАМЕТРИ ТА КОЕФІЦІЄНТИ ----------
+const SCALE = 0.0254;          // Коефіцієнт переведення одиниць Source Engine в метри
+const EYE_HEIGHT = 1.72;       // Висота очей гравця (стандартна камера від 1-ї особи)
+const MOVE_SPEED = 4.4;        // Базова швидкість пересування гравця (м/с)
+const PLAYER_RADIUS = 0.38;    // Радіус циліндра колізії для перевірки стін
+const ZEUS_CLIENT_RANGE = 3.2; // Максимальна дальність нанесення удару Зевсом
+const ZEUS_COOLDOWN_MS = 1100; // Час перезарядки використання Зевса (мс)
+const GRAVITY_VAL = 9.81;      // Константи гравітації для майбутніх розширень фізики
+
+// ---------- 2. DOM-ЕЛЕМЕНТИ ТА УПРАВЛІННЯ ІНТЕРФЕЙСОМ (HUD) ----------
 const el = (id) => document.getElementById(id);
-const menuEl = el('menu'), hudEl = el('hud');
-const statusEl = el('menuStatus'), waitOverlay = el('waitOverlay'), waitCount = el('waitCount');
-const healthBar = el('healthBar'), healthText = el('healthText');
-const roomBadge = el('roomBadge'), scoreBadge = el('scoreBadge'), killfeedEl = el('killfeed');
-const centerMsg = el('centerMsg'), scoreboardEl = el('scoreboard');
+const menuEl = el('menu');
+const hudEl = el('hud');
+const statusEl = el('menuStatus');
+const waitOverlay = el('waitOverlay');
+const waitCount = el('waitCount');
+const healthBar = el('healthBar');
+const healthText = el('healthText');
+const roomBadge = el('roomBadge');
+const scoreBadge = el('scoreBadge');
+const killfeedEl = el('killfeed');
+const centerMsg = el('centerMsg');
+const scoreboardEl = el('scoreboard');
 
-let selectedMode = 'ffa';
+// ---------- 3. МЕНЮ ВИБОРУ РЕЖИМІВ ТА СТОРІН КОМАНД ----------
+let selectedGameMode = 'ffa';
+let selectedPlayerTeam = 'random'; // 'T' (Терористи), 'CT' (Контр-терористи), 'random'
+
 document.querySelectorAll('.modeBtn').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.modeBtn').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
-    selectedMode = btn.dataset.mode;
-    joinGame({ mode: selectedMode });
+    selectedGameMode = btn.dataset.mode;
+    
+    // Якщо гра командна, активуємо вибір сторони (Терористи / Спецназ)
+    if (['2v2', '3v3', '4v4', '1v1'].includes(selectedGameMode)) {
+      renderTeamSelectionPanel();
+    } else {
+      initializeGameConnection({ mode: selectedGameMode, team: 'random' });
+    }
   });
 });
-el('createPrivateBtn').addEventListener('click', () => joinGame({ mode: selectedMode, createPrivate: true }));
+
+function renderTeamSelectionPanel() {
+  statusEl.innerHTML = `
+    <div style="margin-top:12px; padding:16px; background:rgba(20,20,25,0.9); border-radius:8px; border:1px solid #444;">
+      <p style="margin-bottom:10px; color:#ffb020; font-weight:bold; font-size:14px;">Оберіть бійцівську сторону:</p>
+      <button id="chooseT" style="background:#a65b28; color:#fff; padding:8px 16px; margin-right:8px; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">Терористи (T)</button>
+      <button id="chooseCT" style="background:#2b5ca6; color:#fff; padding:8px 16px; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">Спецназ (CT)</button>
+    </div>
+  `;
+  
+  setTimeout(() => {
+    const btnT = el('chooseT');
+    const btnCT = el('chooseCT');
+    if (btnT) btnT.addEventListener('click', () => { selectedPlayerTeam = 'T'; initializeGameConnection({ mode: selectedGameMode, team: 'T' }); });
+    if (btnCT) btnCT.addEventListener('click', () => { selectedPlayerTeam = 'CT'; initializeGameConnection({ mode: selectedGameMode, team: 'CT' }); });
+  }, 50);
+}
+
+el('createPrivateBtn').addEventListener('click', () => initializeGameConnection({ mode: selectedGameMode, team: selectedPlayerTeam, createPrivate: true }));
 el('joinCodeBtn').addEventListener('click', () => {
-  const code = el('codeInput').value.trim().toUpperCase();
-  if (!code) { statusEl.textContent = 'Введіть код кімнати'; return; }
-  joinGame({ roomCode: code });
+  const roomCodeValue = el('codeInput').value.trim().toUpperCase();
+  if (!roomCodeValue) { statusEl.textContent = 'Будь ласка, введіть код кімнати'; return; }
+  initializeGameConnection({ roomCode: roomCodeValue, team: selectedPlayerTeam });
 });
 
-// ---------- networking ----------
-let ws = null;
-let myId = null, myTeam = null, roomMode = null, roomCode = null;
-const remotePlayers = new Map();
+// ---------- 4. МЕРЕЖЕВИЙ КЛІЄНТ ТА WEBSOCKET ПРОТОКОЛ ----------
+let socketConnection = null;
+let localPlayerId = null;
+let localPlayerTeam = null;
+let activeRoomMode = null;
+let activeRoomCode = null;
+const remotePlayersRegistry = new Map(); // Зберігає стани інших підключених гравців
 
-function wsUrl() {
-  const custom = el('serverInput') ? el('serverInput').value.trim() : '';
-  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  if (!custom) return proto + location.host;
-  if (custom.startsWith('ws://') || custom.startsWith('wss://')) return custom;
-  return proto + custom;
+function resolveWebSocketAddress() {
+  const customAddr = el('serverInput') ? el('serverInput').value.trim() : '';
+  const networkProtocol = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  if (!customAddr) return networkProtocol + location.host;
+  if (customAddr.startsWith('ws://') || customAddr.startsWith('wss://')) return customAddr;
+  return networkProtocol + customAddr;
 }
 
-function joinGame(opts) {
-  statusEl.textContent = 'Підключення…';
+function initializeGameConnection(options) {
+  statusEl.textContent = 'З'єднання з сервером арени…';
   try {
-    ws = new WebSocket(wsUrl());
-  } catch (e) {
-    statusEl.textContent = 'Не вдалось підключитись до сервера';
+    socketConnection = new WebSocket(resolveWebSocketAddress());
+  } catch (err) {
+    statusEl.textContent = 'Не вдалося встановити з'єднання з сервером';
     return;
   }
-  ws.onopen = () => {
-    ws.send(JSON.stringify({
+
+  socketConnection.onopen = () => {
+    socketConnection.send(JSON.stringify({
       t: 'join',
-      mode: opts.mode,
-      roomCode: opts.roomCode,
-      createPrivate: !!opts.createPrivate,
-      name: el('nameInput').value.trim() || 'Player'
+      mode: options.mode || 'ffa',
+      team: options.team || 'random',
+      roomCode: options.roomCode || '',
+      createPrivate: !!options.createPrivate,
+      name: el('nameInput').value.trim() || 'Гравець'
     }));
   };
-  ws.onclose = () => { statusEl.textContent = 'З\'єднання розірвано'; };
-  ws.onerror = () => { statusEl.textContent = 'Помилка з\'єднання'; };
-  ws.onmessage = (ev) => onMessage(JSON.parse(ev.data));
+
+  socketConnection.onclose = () => {
+    statusEl.textContent = 'З'єднання перервано сервером';
+  };
+
+  socketConnection.onerror = () => {
+    statusEl.textContent = 'Помилка мережевого сокета';
+  };
+
+  socketConnection.onmessage = (event) => {
+    try {
+      const parsedPacket = JSON.parse(event.data);
+      processServerPacket(parsedPacket);
+    } catch (parseError) {
+      console.error('Помилка обробки пакету:', parseError);
+    }
+  };
 }
 
-function onMessage(msg) {
-  switch (msg.t) {
+function processServerPacket(packet) {
+  switch (packet.t) {
     case 'welcome':
-      myId = msg.id; myTeam = msg.team; roomMode = msg.mode; roomCode = msg.roomCode;
-      roomBadge.textContent = `Кімната ${roomCode} · ${roomMode.toUpperCase()}${myTeam ? ' · Команда ' + myTeam : ''}`;
-      if (msg.waiting) {
+      localPlayerId = packet.id;
+      localPlayerTeam = packet.team;
+      activeRoomMode = packet.mode;
+      activeRoomCode = packet.roomCode;
+      
+      let teamStr = localPlayerTeam === 'T' ? ' [Терористи]' : (localPlayerTeam === 'CT' ? ' [Спецназ]' : '');
+      roomBadge.textContent = `Кімната: ${activeRoomCode} | Режим: ${activeRoomMode.toUpperCase()}${teamStr}`;
+      
+      if (packet.waiting) {
         waitOverlay.classList.remove('hidden');
-        waitCount.textContent = '';
+        waitCount.textContent = 'Очікування суперників…';
       }
       break;
+
     case 'roomInfo':
       if (waitOverlay && !waitOverlay.classList.contains('hidden')) {
-        const need = msg.mode === 'ffa' ? 2 : capacityOf(msg.mode);
-        waitCount.textContent = `(${msg.players.length}/${need})`;
+        const targetCapacity = packet.mode === 'ffa' ? 2 : fetchModeLimit(packet.mode);
+        waitCount.textContent = `(${packet.players.length}/${targetCapacity}) гравців`;
       }
       break;
+
     case 'start':
       waitOverlay.classList.add('hidden');
-      enterWorld();
-      respawnAt(msg.zone);
+      bootGameWorld();
+      respawnAt(packet.zone);
       break;
+
     case 'respawn':
-      respawnAt(msg.zone);
+      respawnAt(packet.zone);
       break;
+
     case 'death':
-      showCenter(`Вас вбив ${msg.by}`, 1400);
+      triggerCenterNotification(`Вас ліквідував ${packet.by}`, 1600);
       break;
+
     case 'state':
-      applyState(msg.players);
+      syncRemotePlayersState(packet.players);
       break;
+
     case 'killfeed':
-      addKillfeed(msg.killer, msg.victim);
+      pushKillfeedMessage(packet.killer, packet.victim);
       break;
+
     case 'score':
-      scoreBadge.textContent = `${msg.scores.A || 0} : ${msg.scores.B || 0}`;
+      scoreBadge.textContent = `Рахунок — T: ${packet.scores.A || 0} | CT: ${packet.scores.B || 0}`;
       break;
+
     case 'end':
-      showScoreboard(msg);
+      renderMatchEndScoreboard(packet);
       break;
+
     case 'leave':
-      removeRemote(msg.id);
+      disposeRemotePlayer(packet.id);
       break;
+
     case 'error':
-      statusEl.textContent = msg.msg;
+      statusEl.textContent = packet.msg;
       break;
   }
 }
 
-function capacityOf(mode) {
-  return { ffa: 8, '1v1': 2, '2v2': 4, '3v3': 6, '4v4': 8 }[mode] || 2;
+function fetchModeLimit(modeName) {
+  const limits = { 'ffa': 8, '1v1': 2, '2v2': 4, '3v3': 6, '4v4': 8 };
+  return limits[modeName] || 2;
 }
 
-function addKillfeed(killer, victim) {
-  const d = document.createElement('div');
-  d.textContent = `${killer}  ⚡  ${victim}`;
-  killfeedEl.appendChild(d);
-  setTimeout(() => d.remove(), 4000);
+function pushKillfeedMessage(killerName, victimName) {
+  const line = document.createElement('div');
+  line.style.margin = '4px 0';
+  line.style.padding = '3px 8px';
+  line.style.background = 'rgba(0,0,0,0.65)';
+  line.style.borderRadius = '4px';
+  line.textContent = `${killerName} ⚡ ${victimName}`;
+  killfeedEl.appendChild(line);
+  setTimeout(() => line.remove(), 4000);
 }
 
-function showCenter(text, ms) {
-  centerMsg.textContent = text;
-  clearTimeout(showCenter._t);
-  showCenter._t = setTimeout(() => { centerMsg.textContent = ''; }, ms);
+function triggerCenterNotification(messageText, duration) {
+  centerMsg.textContent = messageText;
+  clearTimeout(triggerCenterNotification._timer);
+  triggerCenterNotification._timer = setTimeout(() => { centerMsg.textContent = ''; }, duration);
 }
 
-function showScoreboard(msg) {
-  document.exitPointerLock && document.exitPointerLock();
+function renderMatchEndScoreboard(data) {
+  if (document.exitPointerLock) document.exitPointerLock();
   scoreboardEl.classList.remove('hidden');
   scoreboardEl.innerHTML = `
-    <div style="text-align:center">
-      <h2>Перемогла команда ${msg.winner}</h2>
-      <p>${msg.scores.A || 0} : ${msg.scores.B || 0}</p>
-      <button onclick="location.reload()" style="padding:10px 20px;border-radius:8px;border:1px solid #39404f;background:#ffb020;cursor:pointer;">До меню</button>
+    <div style="text-align:center; background:rgba(15,15,22,0.95); padding:40px; border-radius:12px; border:2px solid #ffb020;">
+      <h2 style="color:#ffb020; margin-bottom:12px;">МАТЧ ЗАВЕРШЕНО</h2>
+      <p style="font-size:20px; color:#fff; margin-bottom:15px;">Перемогла сторона: <b>${data.winner}</b></p>
+      <p style="font-size:16px; color:#aaa; margin-bottom:25px;">Рахунок: ${data.scores.A || 0} / ${data.scores.B || 0}</p>
+      <button onclick="location.reload()" style="padding:12px 28px; border-radius:8px; border:none; background:#ffb020; color:#111; font-weight:bold; cursor:pointer;">До меню</button>
     </div>`;
 }
 
-// ---------- three.js scene ----------
-let renderer, scene, camera, mapGroup = null;
-let mapMeshes = [];
-let clock = new THREE.Clock();
-let zeusModel = null, zeusMixer = null, zeusActions = {};
-let agentTemplate = null;
-let myAvatar = null;
-let thirdPerson = false; // Вигляд від 3-ї особи по F3
+// ---------- 5. THREE.JS ГРАФІЧНИЙ ДВИГУН ТА СЦЕНА ----------
+let renderEngine, mainScene, activeCamera, mapGroupContainer = null;
+let collisionMeshesList = [];
+let deltaClock = new THREE.Clock();
+let zeusWeaponMesh = null, zeusAnimationMixer = null, zeusAnimationActions = {};
+let playerModelTemplate = null;
+let primaryAvatarMesh = null;
+let isThirdPersonActive = false; // Перемикач 1-ї та 3-ї особи на F3
 
-const raycaster = new THREE.Raycaster();
-const downRay = new THREE.Raycaster();
-const wallRay = new THREE.Raycaster();
+const hitRaycaster = new THREE.Raycaster();
+const groundRaycaster = new THREE.Raycaster();
+const wallRaycaster = new THREE.Raycaster();
 
-let yaw = 0, pitch = 0;
-let playerPos = new THREE.Vector3(0, 5, 0);
-let lastAttackLocal = 0;
-let keys = {};
-let worldReady = false, pointerLocked = false;
+let yawAngle = 0, pitchAngle = 0;
+let playerWorldPos = new THREE.Vector3(0, 5, 0);
+let lastAttackTick = 0;
+let keyboardState = {};
+let isEngineActive = false, isMouseLocked = false;
 
-function initScene() {
-  renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.shadowMap.enabled = false;
-  document.body.appendChild(renderer.domElement);
-
-  scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x9fc2e0);
-  scene.fog = new THREE.Fog(0x9fc2e0, 40, 170);
-
-  camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 500);
-
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x3a3a3a, 1.1);
-  scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xfff3d6, 1.4);
-  sun.position.set(60, 90, 40);
-  scene.add(sun);
-
-  window.addEventListener('resize', () => {
-    camera.aspect = innerWidth / innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
-  });
-
-  loadMap();
-  loadZeus();
-  loadAgentTemplate();
-
-  renderer.domElement.addEventListener('click', () => {
-    if (worldReady) renderer.domElement.requestPointerLock();
-  });
-  document.addEventListener('pointerlockchange', () => {
-    pointerLocked = document.pointerLockElement === renderer.domElement;
-  });
-  document.addEventListener('mousemove', (e) => {
-    if (!pointerLocked) return;
-    yaw -= e.movementX * 0.0022;
-    pitch -= e.movementY * 0.0022;
-    pitch = Math.max(-1.3, Math.min(1.3, pitch));
-  });
-  document.addEventListener('mousedown', (e) => {
-    if (pointerLocked && e.button === 0) tryAttack();
-  });
-  
-  document.addEventListener('keydown', (e) => {
-    keys[e.code] = true;
-    if (e.code === 'F3') {
-      e.preventDefault();
-      thirdPerson = !thirdPerson;
-      if (myAvatar) myAvatar.visible = thirdPerson;
-      if (zeusModel) zeusModel.visible = !thirdPerson;
-    }
-  });
-  document.addEventListener('keyup', (e) => keys[e.code] = false);
-
-  renderer.setAnimationLoop(tick);
+function bootGameWorld() {
+  menuEl.style.display = 'none';
+  hudEl.classList.remove('hidden');
+  if (!renderEngine) initThreeJsEngine();
+  isEngineActive = true;
+  if (renderEngine.domElement.requestPointerLock) {
+    renderEngine.domElement.requestPointerLock();
+  }
 }
 
-function loadMap() {
+function initThreeJsEngine() {
+  renderEngine = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderEngine.setSize(window.innerWidth, window.innerHeight);
+  renderEngine.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderEngine.shadowMap.enabled = false;
+  document.body.appendChild(renderEngine.domElement);
+
+  mainScene = new THREE.Scene();
+  mainScene.background = new THREE.Color(0x9fc2e0);
+  mainScene.fog = new THREE.Fog(0x9fc2e0, 45, 180);
+
+  activeCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 500);
+
+  // Освітлювальні прилади
+  const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
+  mainScene.add(hemiLight);
+  
+  const sunLight = new THREE.DirectionalLight(0xfff3d6, 1.5);
+  sunLight.position.set(70, 100, 50);
+  mainScene.add(sunLight);
+
+  window.addEventListener('resize', () => {
+    activeCamera.aspect = window.innerWidth / window.innerHeight;
+    activeCamera.updateProjectionMatrix();
+    renderEngine.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  loadMapGeometry();
+  loadZeusModelAsset();
+  loadAgentModelAsset();
+
+  renderEngine.domElement.addEventListener('click', () => {
+    if (isEngineActive && renderEngine.domElement.requestPointerLock) {
+      renderEngine.domElement.requestPointerLock();
+    }
+  });
+
+  document.addEventListener('pointerlockchange', () => {
+    isMouseLocked = document.pointerLockElement === renderEngine.domElement;
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isMouseLocked) return;
+    yawAngle -= e.movementX * 0.0022;
+    pitchAngle -= e.movementY * 0.0022;
+    pitchAngle = Math.max(-1.35, Math.min(1.35, pitchAngle));
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (isMouseLocked && e.button === 0) executeZeusAttack();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    keyboardState[e.code] = true;
+    if (e.code === 'F3') {
+      e.preventDefault();
+      isThirdPersonActive = !isThirdPersonActive;
+      if (primaryAvatarMesh) primaryAvatarMesh.visible = isThirdPersonActive;
+      if (zeusWeaponMesh) zeusWeaponMesh.visible = !isThirdPersonActive;
+    }
+  });
+
+  document.addEventListener('keyup', (e) => {
+    keyboardState[e.code] = false;
+  });
+
+  renderEngine.setAnimationLoop(mainGameTick);
+}
+
+function loadMapGeometry() {
   const mtlLoader = new THREE.MTLLoader();
   mtlLoader.setPath('assets/map/');
   mtlLoader.setResourcePath('assets/map/textures/');
   mtlLoader.load('de_dust2.mtl', (materials) => {
     materials.preload();
-    for (const key in materials.materials) {
-      materials.materials[key].side = THREE.DoubleSide;
+    for (const m in materials.materials) {
+      materials.materials[m].side = THREE.DoubleSide;
     }
     const objLoader = new THREE.OBJLoader();
     objLoader.setMaterials(materials);
@@ -234,228 +335,280 @@ function loadMap() {
     objLoader.load('de_dust2.obj', (obj) => {
       obj.rotation.x = -Math.PI / 2;
       obj.scale.setScalar(SCALE);
-      obj.traverse((c) => { if (c.isMesh) mapMeshes.push(c); });
-      mapGroup = obj;
-      scene.add(obj);
-    }, undefined, (err) => console.error('map load error', err));
-  }, undefined, (err) => console.error('mtl load error', err));
+      obj.traverse((child) => {
+        if (child.isMesh) collisionMeshesList.push(child);
+      });
+      mapGroupContainer = obj;
+      mainScene.add(obj);
+    }, undefined, (err) => console.error('Помилка об'єкту мапи:', err));
+  }, undefined, (err) => console.error('Помилка матеріалів мапи:', err));
 }
 
-function loadZeus() {
+function loadZeusModelAsset() {
   new THREE.GLTFLoader().load('assets/models/zeus.glb', (gltf) => {
-    zeusModel = gltf.scene;
-    const box = new THREE.Box3().setFromObject(zeusModel);
+    zeusWeaponMesh = gltf.scene;
+    const box = new THREE.Box3().setFromObject(zeusWeaponMesh);
     const size = new THREE.Vector3(); box.getSize(size);
-    const targetLen = 0.26;
-    const s = targetLen / Math.max(size.x, size.y, size.z);
-    zeusModel.scale.setScalar(s);
-    zeusModel.position.set(0.22, -0.22, -0.4);
-    zeusModel.rotation.set(0, Math.PI, 0);
-    camera.add(zeusModel);
+    const scaleFactor = 0.26 / Math.max(size.x, size.y, size.z);
+    
+    zeusWeaponMesh.scale.setScalar(scaleFactor);
+    zeusWeaponMesh.position.set(0.22, -0.22, -0.4);
+    zeusWeaponMesh.rotation.set(0, Math.PI, 0);
+    activeCamera.add(zeusWeaponMesh);
+
     if (gltf.animations && gltf.animations.length) {
-      zeusMixer = new THREE.AnimationMixer(zeusModel);
-      for (const clip of gltf.animations) zeusActions[clip.name] = zeusMixer.clipAction(clip);
-      if (zeusActions['firstperson_idle']) zeusActions['firstperson_idle'].play();
+      zeusAnimationMixer = new THREE.AnimationMixer(zeusWeaponMesh);
+      for (const clip of gltf.animations) {
+        zeusAnimationActions[clip.name] = zeusAnimationMixer.clipAction(clip);
+      }
+      if (zeusAnimationActions['firstperson_idle']) {
+        zeusAnimationActions['firstperson_idle'].play();
+      }
     }
-  }, undefined, (err) => console.error('zeus load error', err));
+  }, undefined, (err) => console.error('Помилка зброї Зевс:', err));
 }
 
-function loadAgentTemplate() {
+function loadAgentModelAsset() {
   new THREE.GLTFLoader().load('assets/models/agent.gltf', (gltf) => {
-    const model = gltf.scene;
-    const box = new THREE.Box3().setFromObject(model);
+    const raw = gltf.scene;
+    const box = new THREE.Box3().setFromObject(raw);
     const size = new THREE.Vector3(); box.getSize(size);
-    const targetHeight = 1.8;
-    const s = targetHeight / Math.max(size.y, 0.01);
-    model.scale.setScalar(s);
-    const box2 = new THREE.Box3().setFromObject(model);
-    model.position.y -= box2.min.y;
-    agentTemplate = model;
+    const scaleFactor = 1.8 / Math.max(size.y, 0.01);
+    raw.scale.setScalar(scaleFactor);
+    
+    const boxRecalc = new THREE.Box3().setFromObject(raw);
+    raw.position.y -= boxRecalc.min.y;
+    playerModelTemplate = raw;
 
-    myAvatar = model.clone(true);
-    myAvatar.visible = false;
-    scene.add(myAvatar);
+    primaryAvatarMesh = playerModelTemplate.clone(true);
+    primaryAvatarMesh.visible = false;
+    mainScene.add(primaryAvatarMesh);
 
-    for (const rp of remotePlayers.values()) if (!rp.obj) attachAgentModel(rp);
-  }, undefined, (err) => console.error('agent load error', err));
+    for (const rp of remotePlayersRegistry.values()) {
+      if (!rp.obj) createRemotePlayerMesh(rp);
+    }
+  }, undefined, (err) => console.error('Помилка моделі агента:', err));
 }
 
-function attachAgentModel(rp) {
-  if (!agentTemplate) return;
-  const model = agentTemplate.clone(true);
-  const group = new THREE.Group();
-  group.add(model);
-  const hitSphere = new THREE.Mesh(
+function createRemotePlayerMesh(record) {
+  if (!playerModelTemplate) return;
+  const clone = playerModelTemplate.clone(true);
+  const wrapper = new THREE.Group();
+  wrapper.add(clone);
+
+  const sphere = new THREE.Mesh(
     new THREE.SphereGeometry(0.42, 6, 6),
     new THREE.MeshBasicMaterial({ visible: false })
   );
-  hitSphere.position.y = 1.1;
-  group.add(hitSphere);
-  group.userData.playerId = rp.id;
-  scene.add(group);
-  rp.obj = group;
-  rp.hitSphere = hitSphere;
+  sphere.position.y = 1.1;
+  wrapper.add(sphere);
+  
+  wrapper.userData.playerId = record.id;
+  mainScene.add(wrapper);
+  
+  record.obj = wrapper;
+  record.hitSphere = sphere;
 }
 
-function enterWorld() {
-  menuEl.style.display = 'none';
-  hudEl.classList.add('hidden'); // Виправлено HUD клас, щоб не ховався зайво
-  document.getElementById('hud').classList.remove('hidden');
-  if (!renderer) initScene();
-  worldReady = true;
-  renderer.domElement.requestPointerLock && renderer.domElement.requestPointerLock();
-}
-
+// ---------- 6. ФІЗИЧНИЙ МОДУЛЬ РУХУ ТА КОЛІЗІЙ ----------
 function respawnAt(zone) {
-  let found = false;
-  for (let i = 0; i < 40 && !found; i++) {
-    const ox = zone.sx + (Math.random() * 2 - 1) * zone.radius;
-    const oy = zone.sy + (Math.random() * 2 - 1) * zone.radius;
-    const wx = ox * SCALE;
-    const wz = -oy * SCALE;
+  let placed = false;
+  for (let i = 0; i < 45 && !placed; i++) {
+    const rx = zone.sx + (Math.random() * 2 - 1) * zone.radius;
+    const rz = zone.sy + (Math.random() * 2 - 1) * zone.radius;
+    const wx = rx * SCALE;
+    const wz = -rz * SCALE;
     
-    downRay.set(new THREE.Vector3(wx, 1000, wz), new THREE.Vector3(0, -1, 0));
-    downRay.far = 2000;
-    const hits = mapMeshes.length ? downRay.intersectObjects(mapMeshes, false) : [];
-    if (hits.length) {
-      playerPos.set(wx, hits[0].point.y + EYE_HEIGHT, wz);
-      found = true;
+    groundRaycaster.set(new THREE.Vector3(wx, 1000, wz), new THREE.Vector3(0, -1, 0));
+    groundRaycaster.far = 2500;
+    const hits = collisionMeshesList.length ? groundRaycaster.intersectObjects(collisionMeshesList, false) : [];
+    
+    if (hits.length > 0) {
+      playerWorldPos.set(wx, hits[0].point.y + EYE_HEIGHT, wz);
+      placed = true;
     }
   }
-  if (!found) {
-    playerPos.set(zone.sx * SCALE, 10, -zone.sy * SCALE);
+  if (!placed) {
+    playerWorldPos.set(zone.sx * SCALE, 15, -zone.sy * SCALE);
   }
-  yaw = Math.random() * Math.PI * 2;
-  pitch = 0;
+  yawAngle = Math.random() * Math.PI * 2;
+  pitchAngle = 0;
 }
 
-const moveDir = new THREE.Vector3();
-function updateMovement(dt) {
-  const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
-  const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+const displacement = new THREE.Vector3();
+function updatePlayerPhysics(dt) {
+  const fwd = new THREE.Vector3(-Math.sin(yawAngle), 0, -Math.cos(yawAngle));
+  const rt = new THREE.Vector3(Math.cos(yawAngle), 0, -Math.sin(yawAngle));
   
-  moveDir.set(0, 0, 0);
-  if (keys['KeyW']) moveDir.add(forward);
-  if (keys['KeyS']) moveDir.sub(forward);
-  if (keys['KeyD']) moveDir.add(right);
-  if (keys['KeyA']) moveDir.sub(right);
+  displacement.set(0, 0, 0);
+  if (keyboardState['KeyW']) displacement.add(fwd);
+  if (keyboardState['KeyS']) displacement.sub(fwd);
+  if (keyboardState['KeyD']) displacement.add(rt);
+  if (keyboardState['KeyA']) displacement.sub(rt);
   
-  if (moveDir.lengthSq() > 0) {
-    moveDir.normalize().multiplyScalar(MOVE_SPEED * dt);
+  if (displacement.lengthSq() > 0) {
+    displacement.normalize().multiplyScalar(MOVE_SPEED * dt);
   }
 
-  // ---- ПЕРЕВІРКА КОЛІЗІЙ ЗІ СТІНАМИ ----
-  if (mapMeshes.length && moveDir.lengthSq() > 0) {
-    const checkPos = playerPos.clone().add(new THREE.Vector3(0, -0.5, 0));
-    wallRay.set(checkPos, moveDir.clone().normalize());
-    wallRay.far = PLAYER_RADIUS + moveDir.length();
-    const wallHits = wallRay.intersectObjects(mapMeshes, false);
-    if (wallHits.length === 0) {
-      playerPos.x += moveDir.x;
-      playerPos.z += moveDir.z;
+  // Суворі колізії зі стінами мапи
+  if (collisionMeshesList.length && displacement.lengthSq() > 0) {
+    const originCheck = playerWorldPos.clone().add(new THREE.Vector3(0, -0.4, 0));
+    wallRaycaster.set(originCheck, displacement.clone().normalize());
+    wallRaycaster.far = PLAYER_RADIUS + displacement.length();
+    const walls = wallRaycaster.intersectObjects(collisionMeshesList, false);
+    
+    if (walls.length === 0) {
+      playerWorldPos.x += displacement.x;
+      playerWorldPos.z += displacement.z;
     }
   } else {
-    playerPos.x += moveDir.x;
-    playerPos.z += moveDir.z;
+    playerWorldPos.x += displacement.x;
+    playerWorldPos.z += displacement.z;
   }
 
-  // ---- ПРИЛИПАННЯ ДО ПІДЛОГИ (без великих стрибків) ----
-  downRay.set(new THREE.Vector3(playerPos.x, playerPos.y + 2.0, playerPos.z), new THREE.Vector3(0, -1, 0));
-  downRay.far = 6.0;
-  const hits = mapMeshes.length ? downRay.intersectObjects(mapMeshes, false) : [];
-  if (hits.length) {
-    const targetY = hits[0].point.y + EYE_HEIGHT;
-    // Обмежуємо максимальну швидкість підйому/спуску, щоб не стрибати крізь стіни
-    playerPos.y += (targetY - playerPos.y) * Math.min(1, dt * 8);
+  // Рівне прилипання до поверхні землі
+  groundRaycaster.set(new THREE.Vector3(playerWorldPos.x, playerWorldPos.y + 2.5, playerWorldPos.z), new THREE.Vector3(0, -1, 0));
+  groundRaycaster.far = 8.0;
+  const floors = collisionMeshesList.length ? groundRaycaster.intersectObjects(collisionMeshesList, false) : [];
+  if (floors.length > 0) {
+    const targetFloorY = floors[0].point.y + EYE_HEIGHT;
+    playerWorldPos.y += (targetFloorY - playerWorldPos.y) * Math.min(1, dt * 10);
   }
 
-  if (thirdPerson) {
-    const offset = new THREE.Vector3(0, 1.8, 3.0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-    camera.position.copy(playerPos).add(offset);
-    camera.rotation.set(pitch, yaw, 0, 'YXZ');
-    if (myAvatar) {
-      myAvatar.position.copy(playerPos);
-      myAvatar.position.y -= EYE_HEIGHT;
-      myAvatar.rotation.y = yaw;
+  if (isThirdPersonActive) {
+    const camOffset = new THREE.Vector3(0, 1.8, 3.2).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawAngle);
+    activeCamera.position.copy(playerWorldPos).add(camOffset);
+    activeCamera.rotation.set(pitchAngle, yawAngle, 0, 'YXZ');
+    if (primaryAvatarMesh) {
+      primaryAvatarMesh.position.copy(playerWorldPos);
+      primaryAvatarMesh.position.y -= EYE_HEIGHT;
+      primaryAvatarMesh.rotation.y = yawAngle;
     }
   } else {
-    camera.position.copy(playerPos);
-    camera.rotation.set(pitch, yaw, 0, 'YXZ');
+    activeCamera.position.copy(playerWorldPos);
+    activeCamera.rotation.set(pitchAngle, yawAngle, 0, 'YXZ');
   }
 }
 
-function tryAttack() {
-  const now = performance.now();
-  if (now - lastAttackLocal < ZEUS_COOLDOWN_MS) return;
-  const dir = new THREE.Vector3();
-  camera.getWorldDirection(dir);
-  raycaster.set(camera.position, dir);
-  raycaster.far = ZEUS_CLIENT_RANGE;
-  const spheres = [...remotePlayers.values()].filter(rp => rp.obj && rp.alive).map(rp => rp.hitSphere);
-  const hits = raycaster.intersectObjects(spheres, false);
-  if (zeusActions['firstperson_shoot1']) {
-    zeusActions['firstperson_shoot1'].reset().play();
+// ---------- 7. СИСТЕМА БОЮ ТА РЕЄСТРАЦІЇ ВЛАСНИХ ПОДІЙ ----------
+function executeZeusAttack() {
+  const currentMillis = performance.now();
+  if (currentMillis - lastAttackTick < ZEUS_COOLDOWN_MS) return;
+
+  const gazeDir = new THREE.Vector3();
+  activeCamera.getWorldDirection(gazeDir);
+  
+  hitRaycaster.set(activeCamera.position, gazeDir);
+  hitRaycaster.far = ZEUS_CLIENT_RANGE;
+  
+  const targetSpheres = [...remotePlayersRegistry.values()]
+    .filter((rp) => rp.obj && rp.alive)
+    .map((rp) => rp.hitSphere);
+    
+  const hits = hitRaycaster.intersectObjects(targetSpheres, false);
+
+  if (zeusAnimationActions['firstperson_shoot1']) {
+    zeusAnimationActions['firstperson_shoot1'].reset().play();
   }
-  if (hits.length) {
-    const sphere = hits[0].object;
-    const id = sphere.parent.userData.playerId;
-    ws && ws.send(JSON.stringify({ t: 'attack', targetId: id }));
-    lastAttackLocal = now;
-  } else {
-    lastAttackLocal = now;
+
+  if (hits.length > 0) {
+    const hitObj = hits[0].object;
+    const enemyId = hitObj.parent.userData.playerId;
+    if (socketConnection && socketConnection.readyState === WebSocket.OPEN) {
+      socketConnection.send(JSON.stringify({ t: 'attack', targetId: enemyId }));
+    }
   }
+  lastAttackTick = currentMillis;
 }
 
-function applyState(players) {
-  const seen = new Set();
-  for (const p of players) {
-    seen.add(p.id);
-    if (p.id === myId) {
-      healthBar.style.width = Math.max(0, p.hp) + '%';
-      healthText.textContent = Math.max(0, p.hp);
+// ---------- 8. СИНХРОНІЗАЦІЯ ДАНИХ ІНШИХ ГРАВЦІВ ----------
+function syncRemotePlayersState(list) {
+  const activeIds = new Set();
+  for (const p of list) {
+    activeIds.add(p.id);
+    if (p.id === localPlayerId) {
+      const currentHp = Math.max(0, p.hp);
+      healthBar.style.width = currentHp + '%';
+      healthText.textContent = currentHp;
       continue;
     }
-    let rp = remotePlayers.get(p.id);
-    if (!rp) {
-      rp = { id: p.id, obj: null, alive: p.alive, name: p.name, target: { x: 0, y: 0, z: 0, rotY: 0 } };
-    remotePlayers.set(p.id, rp);
-      if (agentTemplate) attachAgentModel(rp);
+
+    let record = remotePlayersRegistry.get(p.id);
+    if (!record) {
+      record = {
+        id: p.id,
+        obj: null,
+        hitSphere: null,
+        alive: p.alive,
+        name: p.name,
+        target: { x: p.x, y: p.y, z: p.z, rotY: p.rotY }
+      };
+      remotePlayersRegistry.set(p.id, record);
+      if (playerModelTemplate) createRemotePlayerMesh(record);
     }
-    rp.alive = p.alive;
-    const wx = p.x, wy = p.y, wz = p.z;
-    rp.target.x = wx; rp.target.y = wy; rp.target.z = wz; rp.target.rotY = p.rotY;
-    if (rp.obj) rp.obj.visible = p.alive;
+
+    record.alive = p.alive;
+    record.target.x = p.x;
+    record.target.y = p.y;
+    record.target.z = p.z;
+    record.target.rotY = p.rotY;
+
+    if (record.obj) {
+      record.obj.visible = p.alive;
+    }
   }
-  for (const id of [...remotePlayers.keys()]) if (!seen.has(id)) removeRemote(id);
+
+  for (const existingId of [...remotePlayersRegistry.keys()]) {
+    if (!activeIds.has(existingId)) disposeRemotePlayer(existingId);
+  }
 }
 
-function removeRemote(id) {
-  const rp = remotePlayers.get(id);
-  if (rp && rp.obj) scene.remove(rp.obj);
-  remotePlayers.delete(id);
+function disposeRemotePlayer(id) {
+  const record = remotePlayersRegistry.get(id);
+  if (record && record.obj) {
+    mainScene.remove(record.obj);
+  }
+  remotePlayersRegistry.delete(id);
 }
 
+// Регулярна відправка пакету input на сервер кожні 50мс
 setInterval(() => {
-  if (!worldReady || !ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({
-    t: 'input', x: playerPos.x, y: playerPos.y - EYE_HEIGHT, z: playerPos.z,
-    rotY: yaw, pitch
+  if (!isEngineActive || !socketConnection || socketConnection.readyState !== WebSocket.OPEN) return;
+  socketConnection.send(JSON.stringify({
+    t: 'input',
+    x: playerWorldPos.x,
+    y: playerWorldPos.y - EYE_HEIGHT,
+    z: playerWorldPos.z,
+    rotY: yawAngle,
+    pitch: pitchAngle
   }));
 }, 50);
 
-function tick() {
-  const dt = Math.min(0.05, clock.getDelta());
-  if (worldReady) {
-    updateMovement(dt);
-    if (zeusMixer) zeusMixer.update(dt);
-    for (const rp of remotePlayers.values()) {
+// ---------- 9. ОСНОВНИЙ ЦИКЛ РЕНДЕРИНГУ (TICK) ----------
+function mainGameTick() {
+  const dt = Math.min(0.05, deltaClock.getDelta());
+
+  if (isEngineActive) {
+    updatePlayerPhysics(dt);
+
+    if (zeusAnimationMixer) {
+      zeusAnimationMixer.update(dt);
+    }
+
+    // Плавна інтерполяція віддалених моделей гравців
+    for (const rp of remotePlayersRegistry.values()) {
       if (!rp.obj) continue;
-      rp.obj.position.lerp(new THREE.Vector3(rp.target.x, rp.target.y, rp.target.z), Math.min(1, dt * 10));
-      const curY = rp.obj.rotation.y;
-      let diff = rp.target.rotY - curY;
+      const targetPos = new THREE.Vector3(rp.target.x, rp.target.y, rp.target.z);
+      rp.obj.position.lerp(targetPos, Math.min(1, dt * 12));
+      
+      const currentRotY = rp.obj.rotation.y;
+      let diff = rp.target.rotY - currentRotY;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-      rp.obj.rotation.y = curY + diff * Math.min(1, dt * 10);
+      rp.obj.rotation.y = currentRotY + diff * Math.min(1, dt * 12);
     }
   }
-  if (renderer) renderer.render(scene, camera);
+
+  if (renderEngine) {
+    renderEngine.render(mainScene, activeCamera);
+  }
 }
