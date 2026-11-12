@@ -568,6 +568,8 @@ function disposeRemotePlayer(id) {
 
 setInterval(() => {
   if (!isEngineActive || !socketConnection || socketConnection.readyState !== WebSocket.OPEN) return;
+  if (!localPlayerId) return; // Захист від відправки пакету до завершення авторизації у грі
+  
   socketConnection.send(JSON.stringify({
     t: 'input',
     x: playerWorldPos.x,
