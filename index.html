@@ -5,14 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CS Zeus Arena</title>
 <link rel="stylesheet" href="style.css">
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-  }
-}
-</script>
+<!-- Підключаємо Three.js глобально через CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 </head>
 <body>
   <div id="menu">
@@ -58,6 +55,7 @@
     <div id="waitOverlay" class="hidden">Очікуємо гравців… <span id="waitCount"></span></div>
   </div>
 
-  <script type="module" src="main.js"></script>
+  <!-- Підключаємо main.js як звичайний скрипт -->
+  <script src="main.js"></script>
 </body>
 </html>
